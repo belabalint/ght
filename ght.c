@@ -102,19 +102,20 @@ TABS ARE SPACES!
 #define PI_IR_REC           0
 #define PI_PHTRIG           1
  
-///structures
+// Global variables
+// this variable holds the status of the 595 chips
+unsigned char TI_595_state_vector[80]; 
  
-// battery temperature selector
-typedef enum 
-{ 
-    BATTERY_TEMP_COLD,
-    BATTERY_TEMP_COOL,
-    BATTERY_TEMP_NORMAL,
-    BATTERY_TEMP_WARM,
-    BATTERY_TEMP_HOT
-} battery_temperature;
+// file handles for I2C devices
+int file_handle_ADC, file_handle_DAC, file_handle_DigPot; 
  
-// enable, disable enum
+// this should not be a global variable
+int error_code; 
+ 
+// used to iterate through the electrode relays
+// this variable is modified by increment_relay_address(char skip_cz)
+// and also modified by reset_relay_address()
+int relay_address;
 typedef enum 
 {
     DISABLE,
@@ -134,24 +135,8 @@ typedef enum
     INCLUDING_CZ,
     EXCLUDING_CZ
 } skip_cz_t;
- 
-// Global variables
-// this variable holds the status of the 595 chips
-unsigned char TI_595_state_vector[80]; 
- 
-// file handles for I2C devices
-int file_handle_ADC, file_handle_DAC, file_handle_DigPot; 
- 
-// this should not be a global variable
-int error_code; 
- 
-// used to iterate through the electrode relays
-// this variable is modified by increment_relay_address(char skip_cz)
-// and also modified by reset_relay_address()
-int relay_address;
- 
- 
-// !!! T5 and T6 SPST/SPDT re in reverse order
+
+
 void increment_relay_address(skip_cz_t skip_cz)
 {
     // increment relay_address by 2
@@ -186,10 +171,18 @@ void reconnect_electrode_to_common(int address)
     }
     update_595_state();
 }
-
-
-
-
+void connect_to_mohm(int address)
+{
+    if (relay_address < 75)
+        {
+            TI_595_state_vector[relay_address]='0';     // drive spst, connect 1MOhm
+        }
+    else
+        {
+            TI_595_state_vector[relay_address+1]='0';   // drive spst, connect 1MOhm
+        }
+    update_595_state();
+}
 
 void connect_electrode_to_driven(int address)
 {
@@ -204,6 +197,7 @@ void connect_electrode_to_driven(int address)
         TI_595_state_vector[address]='1';     // drive spdt 
         TI_595_state_vector[address+1]='1';   // drive spst
     }
+    update_595_state();
 }
 // resets electrode address to FP1
 void reset_relay_address()
@@ -225,7 +219,7 @@ void USB_5v_out_enable(enable_t e)
     }
     printf(" - OK\n");
 }
- 
+	
 void init_i2c_devices()
 {
     printf("Initializing digital potentiometer...");
@@ -487,159 +481,8 @@ void ac_dac_init() // initializing digit. to analog
     
     printf(" - OK\n");
 }
- 
-/// PART: KOCKA ///
- 
-// drives or releases K4 on kocka
-void kocka_k4(char b)
-{
-    if (b==1) // close
-    {
-        TI_595_state_vector[TI_595_KOCKA_K4] = '1';
-    }
-    else // open
-    {
-        TI_595_state_vector[TI_595_KOCKA_K4] = '0';
-    }
-    update_595_state();
-}
- 
-// drives or releases K3 on kocka
-void kocka_k3(char b)
-{
-    if (b==1) // close state
-    {
-        TI_595_state_vector[TI_595_KOCKA_K3] = '1';
-    }
-    else // open state
-    {
-        TI_595_state_vector[TI_595_KOCKA_K3] = '0';
-    }
-    update_595_state();
-}
- 
-// drives or releases K2 on kocka
-void kocka_k2(char b)
-{
-    if (b==1) // close state
-    {
-        TI_595_state_vector[TI_595_KOCKA_K2] = '1';
-    }
-    else // open state                                                             
-    {
-        TI_595_state_vector[TI_595_KOCKA_K2] = '0';
-    }
-    update_595_state();
-}
- 
-// sets kocka dc voltage
-void kocka_set_voltage(double voltage)
-{
-    uint32_t command = 0;
-    uint32_t dac_num = 0;
-    char bit;
-    
-    // voltage must not exceed 0.3
-    if (voltage > 0.3)
-    {
-        voltage = 0.3;
-    }
-    
-    // calculate dac number
-    dac_num = round((voltage/2.5)*65535);
-    dac_num = dac_num << 4;
-    
-    // build command 
-    command = 0x03;
-    command = command << 20;
-    command = command | dac_num;
-            
-    // pull up sclk
-    TI_595_state_vector[TI_595_KOCKA_SCLK] = '0';
-    update_595_state(); 
-    
-    // pull down sync
-    TI_595_state_vector[TI_595_KOCKA_SYNC] = '1';
-    update_595_state(); 
-    
-    // clock out data
-    for(int i=23; i>=0 ; i--)
-    {
-        // put sdata out
-        bit = (command >> i) & 0x0001;
-        if (bit == 0)
-        {
-            TI_595_state_vector[TI_595_KOCKA_SDI] = '1';
-        }
-        else 
-        {
-            TI_595_state_vector[TI_595_KOCKA_SDI] = '0';
-        }
-        update_595_state();
-        
-        // clock sdata
-        TI_595_state_vector[TI_595_KOCKA_SCLK] = '1';
-        update_595_state();
-        TI_595_state_vector[TI_595_KOCKA_SCLK] = '0';
-        update_595_state(); 
-    }
-    
-    // pull up sync
-    TI_595_state_vector[TI_595_KOCKA_SYNC] = '0';
-    update_595_state(); 
-}
- 
-// Initializes kocka relays and the kocka DAC
-void kocka_init()
-{
-    printf("Initializing KOCKA...");
-    
-    // pull up sclk
-    TI_595_state_vector[TI_595_KOCKA_SCLK] = '0';
-    
-    // pull up sync
-    TI_595_state_vector[TI_595_KOCKA_SYNC] = '0';
-    update_595_state(); 
-    
-    // release all relays
-    kocka_k2(0);
-    kocka_k3(0);
-    
-    // enable kocka VDD
-    kocka_k4(1); 
-    kocka_set_voltage(0.0);
-    printf(" - OK\n");
-}
- 
-// applies v Volts DC through kocka
-void kocka(double v)
-{
-    printf("Setting kocka voltage to %f V...", v);
-    
-    kocka_set_voltage(0.0); // first set kocka voltage to 0.0 V
-    
-    // release battery (shorts kocka)
-    kocka_k2(0);
-    kocka_k3(0);
-    
-    if (v == 0)
-    {
-        // battery already set to 0 and released
-    }
-    else if (v > 0)
-    {
-        kocka_k2(1);
-        kocka_set_voltage(v);
-    }
-    else if (v < 0)
-    {
-        kocka_k3(1);
-        v = fabs(v);     
-    }
-    
-    printf(" - OK\n");
-}
- 
+
+
 void system_init(void)
 {
     printf("INIT START\n");
@@ -690,95 +533,6 @@ void system_init(void)
     kocka_init();
     
     printf("INIT END\n");
-}
- 
-void batemu_set_temp(battery_temperature bt)
-{
-    int digipot_value;
-    int error_code;
-    
-    printf("Setting emulated temperature to ");
-    
-    if (bt == BATTERY_TEMP_COLD)
-    {
-        printf("COLD\n");
-        digipot_value = 200;
-    }
-    else if (bt == BATTERY_TEMP_COOL)
-    {
-        printf("COOL\n");
-        digipot_value = 123;
-    }
-    else if (bt == BATTERY_TEMP_NORMAL)
-    {
-        printf("NORMAL\n");
-        digipot_value = 51;
-    }
-    else if (bt == BATTERY_TEMP_WARM)
-    {
-        printf("WARM\n");
-        digipot_value = 21;
-    }
-    else if (bt == BATTERY_TEMP_HOT)
-    {
-        printf("WARM\n");
-        digipot_value = 10;
-    }
-    else 
-    {
-        printf("NORMAL\n");
-        digipot_value = 51;
-    }
-    
-    error_code = wiringPiI2CWriteReg8 (file_handle_DigPot, 0, digipot_value);
-    if (error_code == -1)
-    {
-        printf("Failed to set emulated temperature\r\n");
-    }
-}
- 
-// reads batemu current
-double batemu_get_current()
-{
-    double voltage;
-    double current;
-    uint32_t adc_readout;
-    
-    wiringPiI2CReadReg8(file_handle_ADC, 0x18);
-    
-    digitalWrite(AD7994_CONVST, HIGH); // CONVST Pulsed
-    delayMicroseconds(3);
-    digitalWrite(AD7994_CONVST, LOW);
-    delayMicroseconds(3);
- 
-    adc_readout = wiringPiI2CReadReg16(file_handle_ADC, 0x00);
-    adc_readout = ((adc_readout&0xFF)<<8) | (adc_readout>>8);
-    printf("adc_readout: %d\n", adc_readout);
-    voltage = ((adc_readout/4096.0)*5.0); // calculate ADC voltage
-    //printf("voltage: %f\n", voltage);
-    voltage = voltage-2.5;
-    voltage = voltage/11.361; // calculate actual voltage
-    current = voltage*3.0; // divide by 1/3 Ohms
-    
-    return -current;
-}
- 
-void batemu_enable(enable_t e)
-{
-    if (e == ENABLE)
-    {
-        printf("Enabling battery emulation...");
-        TI_595_state_vector[16] = '0';  // battery emulation enabled
-        TI_595_state_vector[21] = '1';  // red LED is ON
-    }
-    else
-    {
-        printf("Disabling battery emulation...");
-        TI_595_state_vector[16] = '1';  // battery emulation disabled
-        TI_595_state_vector[21] = '0';  // red LED is OFF
-    }
-    update_595_state();
-    printf(" - OK\n");
 }
  
 int AD5696R_set_voltage(double voltage, int channel)
@@ -867,7 +621,6 @@ void wait(double s)
         printf("\n");
     }
 }
- 
 ///
 /// MAIN FUNCTION
 ///
@@ -898,60 +651,13 @@ int main (int argc, char **argv)
         digitalWrite(PI_PHTRIG, LOW);     
     }
     printf("Done.\n");    
-    
-/**** SHORT MODE BEGIN ****/
-/**
-    printf("Starting noise measurement...\n");
-        
-    // set relay configuration
-    reset_relay_address();
-    printf("Connecting all electrodes directly to common\n");
-    for(int i = 0; i<19; i++)
-    {
-        // connect all electrodes directly to common (including CZ)
-        if (relay_address < 75)
-        {
-            TI_595_state_vector[relay_address]='1';     // drive spst
-            TI_595_state_vector[relay_address+1]='0';   // do not drive spdt
-        }
-        else
-        {
-            TI_595_state_vector[relay_address]='0';     // do not drive spdt 
-            TI_595_state_vector[relay_address+1]='1';   // drive spst
-        }
-        increment_relay_address(INCLUDING_CZ);
-    }
-    update_595_state();
- 
-    printf("Waiting for transients to settle...\n");
-    wait(TRANSIENTS_WAIT);
-    printf("Waiting for noise measurement to finish...\n");
-    wait(SHORT_MODE_WAIT);
-    printf("Done.\n");
-/**** SHORT MODE END ****/
-    
-/**** TRIANGLE MODE BEGIN ****/
- 
-/*
-SEQUENCE:
-1: select next elcetrode
-2: 10%, 20%, 50%, 100% triangle without DC
-3: +300mV DC with 100% triangle
-4: -300mv DC with 100% triangle
-5: stop sig. gen and short kocka
-6: goto 1
-*/
-    
+//Starting step1, sine measurements
     printf("Starting sine measurements\n");
     dds_init(SINE); // newly added
-    
     // set excitation DC
     excitacion_dc_set_voltage(2.5);
-    
     // set DDS freq to 5 Hz (earlier 6), sinewave already set
     dds_set_frequency(5); 
-    
- 
     // drive LARGE_SIGNAL_AC_SPST
     printf("Driving LARGE_SIGNAL_AC_SPST\n");
     TI_595_state_vector[69]='1';
@@ -961,52 +667,16 @@ SEQUENCE:
     for(int i = 0; i <  ELECTRODES; i++) // for all electrodes excluding cz
     {
         // connect electrodes directly to driven
-        
-        update_595_state();
-
+        connect_electrode_to_driven(relay_address);
         ac_dac_set(0.5);
-
-        
         printf("Waiting for transients to settle...\n");
         wait(SINE_TIME); // wait for sine to finish
         ac_dac_set(0);
         // switching to measuring with 1MOhm resistance
-        
-        if (relay_address < 75)
-        {
-            TI_595_state_vector[relay_address]='0';     // drive spst, connect 1MOhm
-        }
-        else
-        {
-            TI_595_state_vector[relay_address+1]='0';   // drive spst, connect 1MOhm
-        }
-        update_595_state();
+        connect_to_mohm(relay_address);
         ac_dac_set(0.5);
         wait(SINE_TIME);
-        ac_dac_set(0.0);
- 
-        /*
-        kocka(0.3);     // +300 mV DC
-        printf("Waiting for transients to settle...\n");
-        wait(TRANSIENTS_WAIT);
-        printf("Waiting for measurement to finish...\n");
-        wait(TRIANGLE_MODE_WAIT); 
-        
-        // delay(10000); /// test only (T. Peti)
-        
-        kocka(-0.3);    // -300 mV DC
-        printf("Waiting for transients to settle...\n");
-        wait(TRANSIENTS_WAIT);       // transients to settle + 5 secs
-        printf("Waiting for measurement to finish...\n");
-        wait(TRIANGLE_MODE_WAIT);
-        
-        // delay(10000); /// test only (T. Peti)
-        
-        printf("Turning off signal generation\n");
-        ac_dac_set(0);  // set triangle amplitude to zero
-        kocka(0);       // reset (short) kocka
-        */
-                 
+        ac_dac_set(0.0);    
         // connect electrodes back to common
         reconnect_electrode_to_common(relay_address);
         // next electrode
@@ -1014,7 +684,6 @@ SEQUENCE:
         increment_relay_address(EXCLUDING_CZ);
     }
     printf("Done.\n");
-/**** TRIANGLE MODE END ****/
 
 
 // 1hz sine to ecg channel
@@ -1035,181 +704,6 @@ SEQUENCE:
 
 
 	print("finished drl áramteszt")
-
-/**** SWEEP MODE BEGIN ****/
- 
-/*    printf("Starting sweep mode...\n");
-    
-    // generate logscale frequencies
-    // not used, frequencies are already in the array freqs[FREQS]
-    /*
-    ratio = (double)FREQS/((double)FREQS-1);
-    for (int i=0; i<FREQS; i++)
-    {   
-        freqs[i] = pow((((i*ratio)/(double)FREQS)*10), log10(F2-F1))+F1;
-    }
-    */
- 
-/*    printf("Initializing signal generation for sweep mode\n");
-    ac_dac_set(0);          // (already zero)
-    dds_init(SINE);         // select sine waveform for DDS
-    dds_set_frequency(0);   // zero frequency
-    
-    reset_relay_address();
-    for(int i = 0; i<ELECTRODES; i++) // for every electrode excluding CZ
-    {
-        // connect electrodes directly to driven
-        printf("Connecting current electrode directly to driven\n");
-        if (relay_address < 75)
-        {
-            TI_595_state_vector[relay_address]='1';     // drive spst
-            TI_595_state_vector[relay_address+1]='1';   // drive spdt
-        }
-        else
-        {
-            TI_595_state_vector[relay_address]='1';     // drive spdt 
-            TI_595_state_vector[relay_address+1]='1';   // drive spst
-        }
-        update_595_state();
-        
-        printf("Wait for transients to settle...\n");
-        wait(TRANSIENTS_WAIT);
-        
-        // ampliutde may not be correct 
-        ac_dac_set(0.2); // turn on signal generation
-        for(int j = 0; j < FREQS; j++)
-        {
-            dds_set_frequency(freqs[j]);
-            wait(SWEEP_MODE_WAIT);
-            //delayMicroseconds((1/freqs[j])*4e6); // wait for four periods
-        }
-        
-        // stop signal generation
-        printf("Stopping signal generation\n");
-        ac_dac_set(0);
-        dds_set_frequency(0);
-        
-        // reset relays to common
-        printf("Reconnecting electrode to common\n");
-        if (relay_address < 75)
-        {
-            TI_595_state_vector[relay_address]='1';     // drive spst
-            TI_595_state_vector[relay_address+1]='0';   // do not drive spdt
-        }
-        else
-        {
-            TI_595_state_vector[relay_address]='0';     // do not drive spdt 
-            TI_595_state_vector[relay_address+1]='1';   // drive spst
-        }
-        update_595_state();
-        
-        // next electrode
-        if (i<17) printf("Selecting next electrode\n");
-        increment_relay_address(EXCLUDING_CZ);
-    }
-    printf("Done\n");*/
-/**** SWEEP MODE END ****/
- 
-/**** CMRR MODE BEGIN ****/
-/*
-SEQUENCE
-0: all elercrodes already shorted to common
-1: connect next electrode to driven through 1 MOhms
-2: wait for cmrr measurement
-3: set +300 mV DC
-4: wait for cmrr measurement
-5: set -300 mV DC
-6: wait for cmrr measurement
-7: short kocka
-8: goto 1 
-*/
- 
-/*   printf("Starting CMRR measurement...\n");
-    
-    printf("Initializing signal generation for CMRR measurement\n");
-    dds_set_frequency(CMRR_FREQ);     // set dds frequency
-    ac_dac_set(1);                   // set sine amplitude
-    
-    printf("Driving HV_COUPLING_SPST\n");
-    TI_595_state_vector[71]='1';        // drive HV_COUPLING_SPST
-    
-    printf("Driving COMMON_VS_MIX\n");
-    TI_595_state_vector[70]='1';        // drive common_vs_mix
-    
-    reset_relay_address();
-    for(int i = 0; i<ELECTRODES; i++) // for every electrode excluding CZ
-    {
-        printf("Connecting current electrode to driven trough 1 MOhms\n");
-        
-        printf("//////////////////////////////////\n");
-        printf("///////// Test %d  of 18 /////////\n", i+1); /// by T. Peti
-        printf("//////////////////////////////////\n");
-        
-        if (relay_address < 75)
-        {
-            TI_595_state_vector[relay_address]='0';     // do not drive spst
-            TI_595_state_vector[relay_address+1]='1';   // drive spdt
-        }
-        else
-        {
-            TI_595_state_vector[relay_address]='1';     // drive spdt 
-            TI_595_state_vector[relay_address+1]='0';   // do not drive spst
-        }
-        update_595_state();
-        
-        // no DC
-        printf("Waiting for transients to settle...\n");
-        wait(TRANSIENTS_WAIT);
-        printf("Waiting for CMRR measurement to finish\n");
-        wait(CMRR_WAIT);
-        
-        kocka(0.3);     // apply +300 mV
-        printf("Waiting for transients to settle...\n");
-        wait(TRANSIENTS_WAIT);
-        printf("Waiting for CMRR measurement to finish (+300 mV)\n");
-        wait(CMRR_WAIT);
-        
-        kocka(-0.3);    // apply -300 mV
-        printf("Waiting for transients to settle...\n");
-        wait(TRANSIENTS_WAIT);
-        printf("Waiting for CMRR measurement to finish (-300 mV)\n");
-        wait(CMRR_WAIT);
- 
-        kocka(0);       // short kocka
-        
-        // reset relays to common
-        printf("Reconnecting current electrode directly to common\n");
-        if (relay_address < 75)
-        {
-            TI_595_state_vector[relay_address]='1';     // drive spst
-            TI_595_state_vector[relay_address+1]='0';   // do not drive spdt
-        }
-        else
-        {
-            TI_595_state_vector[relay_address]='0';     // do not drive spdt 
-            TI_595_state_vector[relay_address+1]='1';   // drive spst
-        }
-        update_595_state();     
-        
-        if (i<17) printf("Selecting next electrode\n");
-        increment_relay_address(EXCLUDING_CZ);
-    }
- 
-    printf("CMRR measurement finished.\n");
-    
-    excitacion_dc_set_voltage(0);       // clear excitation DC
-    ac_dac_set(0);                      // reset excitation amplitude
-    dds_set_frequency(0);               // stop DDS
-    kocka(0);
-    
-    printf("Releasing HV_COUPLING_SPST\n");
-    TI_595_state_vector[71]='0';        // release HV_COUPLING_SPST
-    
-    printf("Releasing COMMON_VS_MIX\n");
-    TI_595_state_vector[70]='0';        // release common_vs_mix
-    printf("Program exit\n");
-/**** CMRR MODE END ****/*/
- 
     return 0 ;
 }
  
