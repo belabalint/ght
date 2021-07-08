@@ -169,7 +169,42 @@ void increment_relay_address(skip_cz_t skip_cz)
         relay_address = 75;
     }   
 }
- 
+void reconnect_electrode_to_common(int address)
+{
+
+    printf("Reconnecting electrode to common\n");
+
+    if (address < 75)
+    {
+        TI_595_state_vector[address]='1';     // drive spst
+        TI_595_state_vector[address+1]='0';   // do not drive spdt
+    }
+    else
+    {
+        TI_595_state_vector[address]='0';     // do not drive spdt 
+        TI_595_state_vector[address+1]='1';   // drive spst
+    }
+    update_595_state();
+}
+
+
+
+
+
+void connect_electrode_to_driven(int address)
+{
+	printf("Connecting current electrode directly to driven\n");
+    if (address < 75)
+    {
+        TI_595_state_vector[address]='1';     // drive spst
+        TI_595_state_vector[address+1]='1';   // drive spdt
+    }
+    else
+    {
+        TI_595_state_vector[address]='1';     // drive spdt 
+        TI_595_state_vector[address+1]='1';   // drive spst
+    }
+}
 // resets electrode address to FP1
 void reset_relay_address()
 {
@@ -353,7 +388,7 @@ void dds_set_frequency(double f)
     uint32_t freg = 0;
     uint16_t freg_lsb = 0;
     uint16_t freg_msb = 0;
-    static char dds_fsel = 0;
+    static char dds_fsel = 0; //why static??¿¿
     
     printf("Setting DDS frequency to %f Hz\n", f);
     
@@ -649,7 +684,7 @@ void system_init(void)
     
     printf("Powering USB...");
  
-    dds_init(TRIANGLE);
+    dds_init(SINE);
     ac_dac_init();
     ac_dac_set(0);
     kocka_init();
@@ -838,39 +873,16 @@ void wait(double s)
 ///
  
 int main (int argc, char **argv)
-{
-    // amplitudes in triangle mode, 1 means 100%
-    double range[4] = {0.1,0.2,0.5,1};
-    
-    // frequencies in sweep mode (in Hz)
-    double freqs[] = {0.5, 1, 2, 5, 10, 20, 50};
-    
-    // not used anymore
-    // used to generate frequencies for sweep mode
-    double ratio;
-    
+{    
     /// for testing if the rasp GPIO pins are working properly (not guaranteed)
     if (wiringPiSetup () == -1)
         return 1;
-    
     digitalWrite (21,1);        /// by T. Peti
     delay(2000);
     digitalWrite (21,0);
-    
-    
     printf("Program started already.\n");
     system_init();
- 
- 
-    
-    // setup battery emulator
-    batemu_set_temp(BATTERY_TEMP_COOL);
-    printf("Waiting for digipot to settle...\n");
-    wait(BATEMU_WAIT);
-    batemu_enable(ENABLE);
-    batemu_set_voltage(4.1);
- 
-    // DRL 
+    // DRL
     TI_595_state_vector[65] = '0'; // do not drive DRL_SOURCE_SELECT
     TI_595_state_vector[63] = '1'; // drive DRL_JACK_SPST
     update_595_state();
@@ -930,7 +942,7 @@ SEQUENCE:
 6: goto 1
 */
     
-    printf("Starting triangle measurement...\n");
+    printf("Starting sine measurements\n");
     dds_init(SINE); // newly added
     
     // set excitation DC
@@ -949,17 +961,7 @@ SEQUENCE:
     for(int i = 0; i <  ELECTRODES; i++) // for all electrodes excluding cz
     {
         // connect electrodes directly to driven
-        printf("Connecting current electrode directly to driven\n");
-        if (relay_address < 75)
-        {
-            TI_595_state_vector[relay_address]='1';     // drive spst
-            TI_595_state_vector[relay_address+1]='1';   // drive spdt
-        }
-        else
-        {
-            TI_595_state_vector[relay_address]='1';     // drive spdt 
-            TI_595_state_vector[relay_address+1]='1';   // drive spst
-        }
+        
         update_595_state();
 
         ac_dac_set(0.5);
@@ -1006,29 +1008,37 @@ SEQUENCE:
         */
                  
         // connect electrodes back to common
-        printf("Reconnecting electrode to common\n");
-        if (relay_address < 75)
-        {
-            TI_595_state_vector[relay_address]='1';     // drive spst
-            TI_595_state_vector[relay_address+1]='0';   // do not drive spdt
-        }
-        else
-        {
-            TI_595_state_vector[relay_address]='0';     // do not drive spdt 
-            TI_595_state_vector[relay_address+1]='1';   // drive spst
-        }
-        update_595_state();
-        
+        reconnect_electrode_to_common(relay_address);
         // next electrode
         if (i<17) printf("Selecting next electrode\n");
         increment_relay_address(EXCLUDING_CZ);
     }
     printf("Done.\n");
 /**** TRIANGLE MODE END ****/
- 
+
+
+// 1hz sine to ecg channel
+	printf("Starting 1Hz Sinewave to ECG channel");
+	//connect to ecg channel
+	###
+	ac_dac_set(0.5);
+	dds_set_frequency(1);
+	printf("Sinewave starting on ECG channel...");
+	wait(SINE_TIME);
+	ac_dac_set(0);
+	reconnect_electrode_to_common(#######);
+	printf("finished testing ECG with 1Hz sinewave")
+
+
+//DRL test both ways
+	printf("starting drl áramteszt both ways")
+
+
+	print("finished drl áramteszt")
+
 /**** SWEEP MODE BEGIN ****/
  
-    printf("Starting sweep mode...\n");
+/*    printf("Starting sweep mode...\n");
     
     // generate logscale frequencies
     // not used, frequencies are already in the array freqs[FREQS]
@@ -1040,7 +1050,7 @@ SEQUENCE:
     }
     */
  
-    printf("Initializing signal generation for sweep mode\n");
+/*    printf("Initializing signal generation for sweep mode\n");
     ac_dac_set(0);          // (already zero)
     dds_init(SINE);         // select sine waveform for DDS
     dds_set_frequency(0);   // zero frequency
@@ -1097,7 +1107,7 @@ SEQUENCE:
         if (i<17) printf("Selecting next electrode\n");
         increment_relay_address(EXCLUDING_CZ);
     }
-    printf("Done\n");
+    printf("Done\n");*/
 /**** SWEEP MODE END ****/
  
 /**** CMRR MODE BEGIN ****/
@@ -1114,7 +1124,7 @@ SEQUENCE
 8: goto 1 
 */
  
-    printf("Starting CMRR measurement...\n");
+/*   printf("Starting CMRR measurement...\n");
     
     printf("Initializing signal generation for CMRR measurement\n");
     dds_set_frequency(CMRR_FREQ);     // set dds frequency
@@ -1198,7 +1208,7 @@ SEQUENCE
     printf("Releasing COMMON_VS_MIX\n");
     TI_595_state_vector[70]='0';        // release common_vs_mix
     printf("Program exit\n");
-/**** CMRR MODE END ****/
+/**** CMRR MODE END ****/*/
  
     return 0 ;
 }
