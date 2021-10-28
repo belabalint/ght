@@ -1,8 +1,3 @@
-/*
-questions
-what is the difference between ac_dac_set and dc_set_excitation voltage, and which changes the amplitude of the sine function
-what is drl aramtest
-*/
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -15,32 +10,15 @@ what is drl aramtest
 #include <time.h>
 #include "sinetable.h"
 // change this to 2 for quick testing, keep it 18 otherwise
-#define ELECTRODES 2
+#define ELECTRODES 18
  
 // time constants in seconds
-#define SHORT_MODE_WAIT             70
-#define TRIANGLE_MODE_WAIT          4
-#define SWEEP_MODE_WAIT             10
-#define CMRR_WAIT                   70
 #define TRANSIENTS_WAIT             5
-#define BATEMU_WAIT                 0.1
 #define SYNC_WAIT                   0.5
-#define SINE_TIME                   3 
+#define SINE_TIME                   3
 #define ECG_WAIT                    30
- 
-// you can use this for triangle/sweep mode waits:
-// delayMicroseconds(4e6*(1/6.0)); // wait four periods
- 
-// the number of frequencies in sweep mode
-#define FREQS   7
- 
-// F1, F2 (not used)
-// used to generate logscale frequencies from F1 TO F2
-#define F1      0.5
-#define F2      50
- 
-// CMRR
-#define CMRR_FREQ 50
+#define DRL_WAIT                    30
+
  
 // pins
 #define TI_595_SRCK         10
@@ -60,14 +38,7 @@ what is drl aramtest
 #define TI_595_AC_DAC_CLK   4
 #define TI_595_AC_DAC_SRI   8
 #define TI_595_AC_DAC_LD    15
- 
-// Kocka
-#define TI_595_KOCKA_K4     67 
-#define TI_595_KOCKA_K3     66
-#define TI_595_KOCKA_K2     61
-#define TI_595_KOCKA_SDI    12
-#define TI_595_KOCKA_SYNC   13
-#define TI_595_KOCKA_SCLK   14
+
  
 // sync pins
 #define PI_IR_REC           0
@@ -186,50 +157,6 @@ void update_595_state(void)
     digitalWrite(TI_595_RCK, LOW);
     delayMicroseconds(1);   
 }
-void reconnect_electrode_to_common(int address)
-{
-    printf("Reconnecting electrode to common\n");
-
-    if (address < 75)
-    {
-        TI_595_state_vector[address]='1';     // drive spst
-        TI_595_state_vector[address+1]='0';   // do not drive spdt
-    }
-    else
-    {
-        TI_595_state_vector[address]='0';     // do not drive spdt 
-        TI_595_state_vector[address+1]='1';   // drive spst
-    }
-    update_595_state();
-}
-void connect_to_mohm(int address)
-{
-    if (relay_address < 75)
-        {
-            TI_595_state_vector[relay_address]='0';     // drive spst, connect 1MOhm
-        }
-    else
-        {
-            TI_595_state_vector[relay_address+1]='0';   // drive spst, connect 1MOhm
-        }
-    update_595_state();
-}
-
-void connect_electrode_to_driven(int address)
-{
-	printf("Connecting current electrode directly to driven\n");
-    if (address < 75)
-    {
-        TI_595_state_vector[address]='1';     // drive spst
-        TI_595_state_vector[address+1]='1';   // drive spdt
-    }
-    else
-    {
-        TI_595_state_vector[address]='1';     // drive spdt 
-        TI_595_state_vector[address+1]='1';   // drive spst
-    }
-    update_595_state();
-}
 // clocks out 16 bits of data
 // NO FSYNC!
 // used in DDS functions
@@ -307,6 +234,13 @@ void dds_init()
     update_595_state();
     
     printf(" - OK\n");
+}
+uint16_t swapper(uint16_t tmp)
+{
+    uint16_t dac_value;
+    dac_value = tmp << 8;
+    dac_value = dac_value | (tmp >> 8);
+    return dac_value;
 }
  
 void dds_set_frequency(double f)
@@ -466,8 +400,9 @@ void system_init(void)
     
     printf("INIT END\n");
 }
+
  
-int AD5696R_set_voltage(double voltage, int channel)
+void set_ad5696_dac_voltage(double voltage, int channel)
 {
     uint16_t dac_value;
     uint16_t tmp;
@@ -475,10 +410,10 @@ int AD5696R_set_voltage(double voltage, int channel)
     int error_code;
     
     if (channel == 0) {
-        command = 0x31;
+        command = 0b00110001;
     }
     else if (channel == 1) {
-        command = 0x32;
+        command = 0b00110010;
     }
     else if (channel == 2) {
         command = 0b00110100;
@@ -487,28 +422,13 @@ int AD5696R_set_voltage(double voltage, int channel)
         command = 0b00111000;
     }
     else {
-        command = 0x31;
+        command = 0b00110010;
     }
-    
+    printf("Setting ad_5696 voltage for channel %d to %fV...  ",channel, voltage);
     // setting the output voltage 
     tmp = round((voltage/5.0)*65535);
-    
-    dac_value = 0;
-    dac_value = tmp << 8;
-    dac_value = dac_value | (tmp >> 8);
-    //printf("%d\n", tmp);
-    // writing DAC
-    error_code = wiringPiI2CWriteReg16(file_handle_DAC, channel, dac_value);
-
-    return error_code;
-}
- 
-void set_ad5696_dac_voltage(double voltage, int channel)
-{
-    int error_code;
-    printf("Setting ad_5696 voltage for channel %d to %fV...  ",channel, voltage);
-    
-    error_code = AD5696R_set_voltage(voltage, channel);
+    dac_value = swapper(tmp);
+    error_code = wiringPiI2CWriteReg16(file_handle_DAC, command, dac_value);
     
     printf("%i\n", error_code);
 }
@@ -533,16 +453,39 @@ void wait(double s)
         printf("\n");
     }
 }
-uint16_t swapper(uint16_t tmp)
+
+float convert_ad7994_output_to_volts(uint16_t outp) 
 {
-    uint16_t dac_value;
-    dac_value = tmp << 8;
-    dac_value = dac_value | (tmp >> 8);
-    return dac_value;
+    outp = swapper(outp);
+    outp = outp << 4;
+    float tmp = outp/16;
+    tmp = tmp/4095;
+    tmp = tmp*5;
+    return tmp;
+    
 }
-float read_ad7994_voltage(int channel) 
+/*uint16_t read_ad7994_voltage_alt()
+{
+    uint8_t configregisteraddress = 0b00000010;
+    uint8_t configregisterdataon = 0b00011000;
+    uint8_t configregisterdataoff = 0b00001000;
+    uint8_t cycleregisteraddress = 0b00000011;
+    uint8_t cycleregisterdataon = 0b00000001;
+    uint8_t cycleregisterdataoff = 0b00000000;
+    uint8_t conversionregisteraddress = 0;
+    int error_code = wiringPiI2CWriteReg16(file_handle_ADC, configregisteraddress, configregisterdataon);
+    error_code = wiringPiI2CWriteReg16(file_handle_ADC, cycleregisteraddress, cycleregisterdataon);
+    uint16_t read2bytes = wiringPiI2CReadReg16(file_handle_ADC, conversionregisteraddress);
+    float voltagevalue = convert_ad7994_output_to_volts(read2bytes);
+    printf("(ALT)Reading value from conversion result register on ad7994-1 In1: %f\n",voltagevalue);
+    error_code = wiringPiI2CWriteReg16(file_handle_ADC, configregisteraddress, configregisterdataon);
+    error_code = wiringPiI2CWriteReg16(file_handle_ADC, cycleregisteraddress, cycleregisterdataon);
+    return voltagevalue;
+}*/
+uint16_t read_ad7994_voltage(int channel) 
 {
     uint8_t conversionregaddress;
+    uint16_t read2bytes;
     if (channel == 1)
     {
         conversionregaddress = 0b00010000;
@@ -570,10 +513,16 @@ float read_ad7994_voltage(int channel)
     {
         printf(" - UNREACHABLE\n");
     }
-    uint16_t read2bytes = wiringPiI2CReadReg16(file_handle_ADC, conversionregaddress);
-    uint16_t voltagevalue = read2bytes;
-    printf("Reading value from conversion result register on ad7994-1 In%d: %d\n",channel, voltagevalue);
-    return voltagevalue;
+    float voltagevaluesum = 0;
+    for (int i = 0; i < 3; i++)
+    {
+        read2bytes = wiringPiI2CReadReg16(file_handle_ADC, conversionregaddress);
+        voltagevaluesum += convert_ad7994_output_to_volts(read2bytes);
+        delay(10);
+    }
+    voltagevaluesum /= 3;
+    printf("Reading value from conversion result register on ad7994-1 In%d: %f\n",channel, voltagevaluesum);
+    return voltagevaluesum;
 }
 ///
 /// MAIN FUNCTION
@@ -598,90 +547,141 @@ int main (int argc, char **argv)
         digitalWrite(PI_IR_REC, LOW);
         digitalWrite(PI_PHTRIG, LOW);     
     }
-    printf("Done.\n");    
-//Starting step1, sine measurements
-    /* printf("Starting sine measurements\n");
-    // set excitation DC
-    set_ad5696_dac_voltage(2.5, 1);
-    // set DDS freq to 5 Hz (earlier 6)
-    dds_set_frequency(5); 
+    printf("Done.\n");
     // drive LARGE_SIGNAL_AC_SPST
     printf("Driving LARGE_SIGNAL_AC_SPST\n");
     TI_595_state_vector[69]='1';
-    update_595_state();
-    
+    update_595_state();    
+//Starting step1, sine measurements
+    printf("Starting sine measurements\n");
+    // set excitation DC
+    // set DDS freq to 5 Hz (earlier 6)
+    set_ad5696_dac_voltage(2.5, 1);
+    dds_set_frequency(5);
+    ac_dac_set(0.5);
     reset_relay_address();
+    TI_595_state_vector[35]=0;
+    TI_595_state_vector[36]=0;
+    update_595_state();
     for(int i = 0; i <  ELECTRODES; i++) // for all electrodes excluding cz
     {
         // connect electrodes directly to driven
-        connect_electrode_to_driven(relay_address);
-        ac_dac_set(0.5);
-        printf("Waiting for transients to settle...\n");
+        TI_595_state_vector[relay_address]=1;
+        TI_595_state_vector[relay_address+1]=1;
+        update_595_state();
+        printf("Measuring without resistance");
         wait(SINE_TIME); // wait for sine to finish
-        ac_dac_set(0);
         // switching to measuring with 1MOhm resistance
-        connect_to_mohm(relay_address);
-        ac_dac_set(0.5);
+        if (relay_address < 75) {
+            TI_595_state_vector[relay_address]=0;
+        }
+        else {
+            TI_595_state_vector[relay_address+1]=0;
+        }
+        update_595_state();
         wait(SINE_TIME);
-        ac_dac_set(0.0);    
-        // connect electrodes back to common
-        reconnect_electrode_to_common(relay_address);
+        // connect electrodes back to common and resistance
+        TI_595_state_vector[relay_address]=0;
+        TI_595_state_vector[relay_address+1]=0;
+        update_595_state();
+
         // next electrode
-        if (i<17) printf("Selecting next electrode\n");
+        if (i<17) printf("Selecting next electrode, now at address %d\n", relay_address);
         increment_relay_address(EXCLUDING_CZ);
     }
+    ac_dac_set(0);
     set_ad5696_dac_voltage(0, 1);
     dds_set_frequency(0);
-    printf("Done.\n"); */
+    printf("Done.\n"); 
 
 
-// 1hz sine to ecg channel
-	/* printf("Starting 1Hz Sinewave to ECG channel\n");
-    //create sine table
-    /* uint16_t sines[100];
-    for (int i = 0; i < 1000; i++)
-    {
-        sines[i] = swapper(round(6553.5*(sin(acos(-1) * i/500)+1)));//32767.5 for full 5V range
-    } */ 
+// 1hz sine to ecg channel																										
+	TI_595_state_vector[23]='1';  // Fp1 connected to COMMON via 0 Ohm
+	TI_595_state_vector[24]='0';
+	TI_595_state_vector[25]='1';  // Fp2 connected to COMMON via 0 Ohm
+	TI_595_state_vector[26]='0';
+	TI_595_state_vector[27]='1';  // F7 connected to COMMON via 0 Ohm
+	TI_595_state_vector[28]='0';
+	TI_595_state_vector[29]='1';  // F8 connected to COMMON via 0 Ohm
+	TI_595_state_vector[30]='0';
+	TI_595_state_vector[31]='1';  // C3 connected to COMMON via 0 Ohm
+	TI_595_state_vector[32]='0';
+	TI_595_state_vector[33]='1';  // C4 connected to COMMON via 0 Ohm
+	TI_595_state_vector[34]='0';
+	TI_595_state_vector[35]='1';  // Cz connected to COMMON via 0 Ohm
+	TI_595_state_vector[36]='0';
+	TI_595_state_vector[37]='1';  // F3 connected to COMMON via 0 Ohm
+	TI_595_state_vector[38]='0';
+	TI_595_state_vector[39]='1';  // F4 connected to COMMON via 0 Ohm
+	TI_595_state_vector[40]='0';
+	TI_595_state_vector[41]='1';  // Fz connected to COMMON via 0 Ohm
+	TI_595_state_vector[42]='0';
+	TI_595_state_vector[43]='1';  // T3 connected to COMMON via 0 Ohm
+	TI_595_state_vector[44]='0';
+	TI_595_state_vector[45]='1';  // T4 connected to COMMON via 0 Ohm
+	TI_595_state_vector[46]='0';
+	TI_595_state_vector[47]='1';  // P3 connected to COMMON via 0 Ohm
+	TI_595_state_vector[48]='0';
+	TI_595_state_vector[49]='1';  // Pz connected to COMMON via 0 Ohm
+	TI_595_state_vector[50]='0';
+	TI_595_state_vector[51]='1';  // P4 connected to COMMON via 0 Ohm
+	TI_595_state_vector[52]='0';
+	TI_595_state_vector[53]='1';  // O1 connected to COMMON via 0 Ohm
+	TI_595_state_vector[54]='0';
+	TI_595_state_vector[55]='1';  // O2 connected to COMMON via 0 Ohm
+	TI_595_state_vector[56]='0';
+	TI_595_state_vector[75]='0';  // T5 connected to COMMON via 0 Ohm
+	TI_595_state_vector[76]='1';
+	TI_595_state_vector[77]='0';  // T6 connected to COMMON via 0 Ohm
+	TI_595_state_vector[78]='1';  
+	update_595_state();
+
+	printf("Starting 1Hz Sinewave to ECG channel\n");
     //parsing sine values from the table and setting the output voltage of ad5696 channel d to that value
-    /* for (int j = 0; j < ECG_WAIT; j++)
+    for (int j = 0; j < ECG_WAIT; j++)
     {
         for (int i = 0; i < 1000; i++)
         {
         error_code = wiringPiI2CWriteReg16(file_handle_DAC, 0b00111000, sinetable[i]);
-        delayMicroseconds(110);//the time of setting the voltage is around 890microsecs
+        delayMicroseconds(108);//the time of setting the voltage is around 890microsecs
         }
     }
     error_code = wiringPiI2CWriteReg16(file_handle_DAC, 0b00111000, 0);
-	printf("finished testing ECG with 1Hz sinewave\n"); */
+	printf("finished testing ECG with 1Hz sinewave\n");
 
 ///DRL test both ways
-	printf("starting drl áramteszt both ways\n");
-    /*uint16_t minimum = 0b0000000000000000;
-    uint16_t maximum = 0b1111111111111111;
-    int errer = wiringPiI2CWriteReg16(file_handle_ADC, 0b00000111, minimum);
-    int sumahera = wiringPiI2CWriteReg16(file_handle_ADC, 0b00001000, maximum);
-    uint16_t readmax = wiringPiI2CReadReg16(file_handle_ADC, 0b00000111);
-    uint16_t readmin = wiringPiI2CReadReg16(file_handle_ADC, 0b00001000);
-    printf("%d\n", readmin);
-    printf("%d\n", readmax);*/
+	/*printf("starting drl áramteszt both ways\n");
+    //setting the state vector to the ideal setting in the header
+    for (int i = 0; i < 80; i++) {
+        TI_595_state_vector[i] = drltest[i];
+    }
+    update_595_state();
+    set_ad5696_dac_voltage(2.5, 2);
 
-    set_ad5696_dac_voltage(5, 2);
-    delay(10);
-    read_ad7994_voltage(1);
-    read_ad7994_voltage(2);
-    set_ad5696_dac_voltage(0, 2);
-    delay(10);
-    read_ad7994_voltage(1);
-    read_ad7994_voltage(2);
-    read_ad7994_voltage(3);
-    read_ad7994_voltage(4);
-
-    //uint8_t alertreg = wiringPiI2CReadReg16(file_handle_ADC, alertregisteraddress);
-    //printf("%d\n", alertreg);
-    
-
-
+    //measuring drl_cur_sig with excitation_dc set to 5, then 0
+    while (1) {
+    //excitation dc to 0
+        set_ad5696_dac_voltage(5, 1);
+        delay(100);
+        read_ad7994_voltage(2);
+        wait(5);
+    //excitation dc to 5  
+        set_ad5696_dac_voltage(0, 1);
+        delay(100);
+        read_ad7994_voltage(2);
+        wait(5);
+    }
 	printf("finished drl áramteszt\n");
+    printf("Resetting 595 state vector...");*/
+    // status of the 595 chips are set to all zero 
+    for (int i = 0; i < 80; i++)
+    {
+        TI_595_state_vector[i]= '0'; // clear the 595 state 
+    }
+    update_595_state();
+    //resetting drl_cur_sense_bias
+    set_ad5696_dac_voltage(0, 2);
+    printf(" - OK\n");
+    
     return 0;
 }
